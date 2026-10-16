@@ -36,7 +36,7 @@ import { fallbackColorIndex, getSchedulingColor, resolveThemeColor } from '../co
 import { useSchedulingResources } from '../hooks/useSchedulingResources';
 import type { CalendarHandle, MultiCalendarSource } from '../MultiCalendar/MultiCalendar';
 import { MultiCalendar } from '../MultiCalendar/MultiCalendar';
-import type { DateTimeRange } from '../types';
+import type { CalendarSelection, DateTimeRange } from '../types';
 import { AppointmentDetails } from './AppointmentDetails/AppointmentDetails';
 import { BlockTimeForm } from './BlockTimeForm/BlockTimeForm';
 import type { CalendarFilterValues } from './CalendarFilters';
@@ -204,7 +204,7 @@ export function SchedulingWorkspace(props: SchedulingWorkspaceProps): JSX.Elemen
   const [range, setRange] = useState<DateTimeRange>();
 
   // What was selected
-  const [bookingSelection, setBookingSelection] = useState<DateTimeRange>();
+  const [bookingSelection, setBookingSelection] = useState<CalendarSelection>();
   const [selectedAppointment, setSelectedAppointment] = useState<WithId<Appointment>>();
   const [selectedSlot, setSelectedSlot] = useState<WithId<Slot>>();
   // The Slots of a block just written, one per calendar, listed beside whichever is open.
@@ -373,7 +373,7 @@ export function SchedulingWorkspace(props: SchedulingWorkspaceProps): JSX.Elemen
 
   const { timezones, anyUnknown } = useMemo(() => getCalendarTimezones(activeCandidates), [activeCandidates]);
 
-  const startBooking = useCallback((interval: DateTimeRange): void => {
+  const startBooking = useCallback((interval: CalendarSelection): void => {
     setSelectedAppointment(undefined);
     setSelectedSlot(undefined);
     setNewBlockSlots(undefined);
@@ -704,6 +704,7 @@ export function SchedulingWorkspace(props: SchedulingWorkspaceProps): JSX.Elemen
             <Tabs.Panel value="appointment">
               <AppointmentBookingForm
                 defaultStart={bookingSelection.start}
+                defaultTime={bookingSelection.allDay ? undefined : bookingSelection.start}
                 procedureBinding={procedureBinding}
                 diagnosisBinding={diagnosisBinding}
                 mrnSystem={mrnSystem}
