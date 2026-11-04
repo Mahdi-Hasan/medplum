@@ -80,7 +80,7 @@ export function getCronQueue(): Queue<CronJobData> | undefined {
 
 /**
  * Updates the Cron job for the given resource.
- * Only applies changes if the effective cron string has changed.
+ * Only applies changes if the effective cron string, or a Cron's target or onBehalfOf, has changed.
  * @param resource - The resource that was created, updated, or deleted.
  * @param previousVersion - The previous version of the resource, if available.
  * @param context - The background job context.
@@ -123,7 +123,7 @@ export async function addCronJobs(
   const newCronStr = getCronString(resource);
   logger.debug('Cron job for resource', { schedulerId, ...resourceIds, oldCronStr, newCronStr });
 
-  if (oldCronStr === newCronStr) {
+  if (oldCronStr === newCronStr && !hasCronTargetChanged(previousVersion, resource)) {
     // No change in cron job
     return;
   }
@@ -146,6 +146,25 @@ export async function addCronJobs(
 }
 
 const SCHEDULABLE_TYPES: readonly ResourceType[] = ['Bot', 'Cron'];
+
+/**
+ * Returns true if a Cron now runs a different bot, or runs as a different membership.
+ *
+ * The tick unregisters a job whose target or membership is gone, so repointing the Cron must
+ * register it again even when the cron string is unchanged.
+ * @param previousVersion - The previous version of the resource, if available.
+ * @param resource - The new version of the resource.
+ * @returns True if the Cron target or onBehalfOf changed.
+ */
+function hasCronTargetChanged(previousVersion: Resource | undefined, resource: Bot | Cron): boolean {
+  if (resource.resourceType !== 'Cron' || previousVersion?.resourceType !== 'Cron') {
+    return false;
+  }
+  return (
+    previousVersion.targetReference?.reference !== resource.targetReference?.reference ||
+    previousVersion.onBehalfOf?.reference !== resource.onBehalfOf?.reference
+  );
+}
 
 function isSchedulable(resource: Resource | undefined): resource is Bot | Cron {
   return resource !== undefined && SCHEDULABLE_TYPES.includes(resource.resourceType);

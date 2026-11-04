@@ -457,6 +457,70 @@ describe('Cron resource', () => {
       );
     }));
 
+  test('Repointing at a new bot with the same cronString reschedules the job', () =>
+    withTestContext(async () => {
+      const queue = getCronQueue() as any;
+      const cron = await repo.createResource<Cron>(validCron());
+      await findAndExecDispatchJob(cron, 'create');
+
+      // The tick drops the job once the original target is gone; the retarget must register it again
+      const newBot = await repo.createResource<Bot>({ resourceType: 'Bot', name: 'cron-new-target' });
+      const newBotMembership = await systemRepo.createResource<ProjectMembership>({
+        resourceType: 'ProjectMembership',
+        project: createReference(project),
+        user: createReference(newBot),
+        profile: createReference(newBot),
+      });
+
+      queue.upsertJobScheduler.mockClear();
+      await repo.updateResource<Cron>({
+        ...cron,
+        targetReference: createReference(newBot),
+        onBehalfOf: createReference(newBotMembership),
+      });
+      await findAndExecDispatchJob(cron, 'update');
+      expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+        `Cron/${cron.id}`,
+        { pattern: '* * * * *' },
+        { data: buildCronJobData(cron) }
+      );
+    }));
+
+  test('Changing only onBehalfOf reschedules the job', () =>
+    withTestContext(async () => {
+      const queue = getCronQueue() as any;
+      const cron = await repo.createResource<Cron>(validCron());
+      await findAndExecDispatchJob(cron, 'create');
+
+      const otherMembership = await systemRepo.createResource<ProjectMembership>({
+        resourceType: 'ProjectMembership',
+        project: createReference(project),
+        user: createReference(bot),
+        profile: createReference(bot),
+      });
+
+      queue.upsertJobScheduler.mockClear();
+      await repo.updateResource<Cron>({ ...cron, onBehalfOf: createReference(otherMembership) });
+      await findAndExecDispatchJob(cron, 'update');
+      expect(queue.upsertJobScheduler).toHaveBeenCalledWith(
+        `Cron/${cron.id}`,
+        { pattern: '* * * * *' },
+        { data: buildCronJobData(cron) }
+      );
+    }));
+
+  test('An update that changes nothing scheduling-related does not reschedule', () =>
+    withTestContext(async () => {
+      const queue = getCronQueue() as any;
+      const cron = await repo.createResource<Cron>(validCron());
+      await findAndExecDispatchJob(cron, 'create');
+
+      queue.upsertJobScheduler.mockClear();
+      await repo.updateResource<Cron>({ ...cron, identifier: [{ system: 'https://example.com', value: 'renamed' }] });
+      await findAndExecDispatchJob(cron, 'update');
+      expect(queue.upsertJobScheduler).not.toHaveBeenCalled();
+    }));
+
   test('Search by identifier', () =>
     withTestContext(async () => {
       const value = randomUUID();
