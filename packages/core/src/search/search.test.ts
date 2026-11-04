@@ -402,6 +402,13 @@ describe('Search Utils', () => {
     ).toStrictEqual('?probability=ne0.5');
   });
 
+  test.each(['Patient?email:missing=true', 'Patient?email:present=true', 'Patient?email:present=false'])(
+    'Format presence modifier round trip %s',
+    (url) => {
+      expect(formatSearchQuery(parseSearchRequest(url))).toStrictEqual(url.substring(url.indexOf('?')));
+    }
+  );
+
   test('Format number less than', () => {
     expect(
       formatSearchQuery({

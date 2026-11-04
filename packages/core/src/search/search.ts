@@ -109,6 +109,7 @@ const MODIFIER_OPERATORS: Record<string, Operator> = {
   'not-in': Operator.NOT_IN,
   'of-type': Operator.OF_TYPE,
   missing: Operator.MISSING,
+  present: Operator.PRESENT,
   identifier: Operator.IDENTIFIER,
   iterate: Operator.ITERATE,
 };
