@@ -2694,6 +2694,66 @@ describe('QuestionnaireForm', () => {
     expect(response.item[0].answer).toEqual([{ valueString: 'first value' }, { valueString: 'second value' }]);
   });
 
+  test('Radio choices in repeating groups are independent', async () => {
+    const onSubmit = vi.fn();
+
+    await setup({
+      questionnaire: {
+        resourceType: 'Questionnaire',
+        status: 'active',
+        item: [
+          {
+            linkId: 'service',
+            text: 'Service',
+            type: 'group',
+            repeats: true,
+            item: [
+              {
+                linkId: 'service-type',
+                text: 'Service type',
+                type: 'choice',
+                answerOption: [{ valueString: 'Lab Order' }, { valueString: 'Imaging' }],
+              },
+            ],
+          },
+        ],
+      },
+      onSubmit,
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Add Group: Service'));
+    });
+
+    const radios = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="radio"]'));
+    expect(radios).toHaveLength(4);
+
+    // Each group instance gets its own radio group name and option ids
+    expect(radios[0].name).not.toBe(radios[2].name);
+    expect(radios[0].id).not.toBe(radios[2].id);
+
+    // Select the same option in both group instances
+    await act(async () => {
+      fireEvent.click(radios[0]);
+    });
+    await act(async () => {
+      fireEvent.click(radios[2]);
+    });
+
+    expect(radios[0].checked).toBe(true);
+    expect(radios[2].checked).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Submit'));
+    });
+
+    expect(onSubmit).toHaveBeenCalled();
+    const response = onSubmit.mock.calls[0][0];
+    expect(response.item).toHaveLength(2);
+    expect(response.item[0].item[0].answer).toEqual([{ valueString: 'Lab Order' }]);
+    expect(response.item[1].item[0].answer).toEqual([{ valueString: 'Lab Order' }]);
+  });
+
   test('No Answers Defined', async () => {
     await setup({
       questionnaire: {

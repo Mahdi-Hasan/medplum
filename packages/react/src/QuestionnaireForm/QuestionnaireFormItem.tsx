@@ -495,7 +495,8 @@ function getOptionsFromValueSet(valueSetOptions: ValueSetExpansionContains[], na
 }
 
 function QuestionnaireRadioButtonInput(props: QuestionnaireChoiceInputProps): JSX.Element {
-  const { name, item, required, initial, onChangeAnswer, response } = props;
+  const { item, required, initial, onChangeAnswer, response } = props;
+  const name = getInstanceName(props.name, response);
   const valueElementDefinition = getElementDefinition('QuestionnaireItemAnswerOption', 'value[x]');
   const initialValue = getItemInitialValue(initial);
   const {
@@ -588,7 +589,8 @@ function QuestionnaireRadioButtonInput(props: QuestionnaireChoiceInputProps): JS
 }
 
 function QuestionnaireCheckboxInput(props: QuestionnaireChoiceInputProps): JSX.Element {
-  const { name, item, onChangeAnswer, response } = props;
+  const { item, onChangeAnswer, response } = props;
+  const name = getInstanceName(props.name, response);
   const valueElementDefinition = getElementDefinition('QuestionnaireItemAnswerOption', 'value[x]');
   const {
     options: valueSetOptions,
@@ -701,6 +703,18 @@ function QuestionnaireCheckboxInput(props: QuestionnaireChoiceInputProps): JSX.E
       )}
     </Group>
   );
+}
+
+/**
+ * Returns a name that is unique to this response item instance.
+ * Items inside a repeating group share a linkId, so the response item id is appended
+ * to keep radio group names and option ids from colliding across group instances.
+ * @param name - The base name, derived from the item linkId.
+ * @param response - The response item for this instance.
+ * @returns The instance-specific name.
+ */
+function getInstanceName(name: string, response: QuestionnaireResponseItem | undefined): string {
+  return response?.id ? `${name}-${response.id}` : name;
 }
 
 function NoAnswerDisplay(): JSX.Element {
