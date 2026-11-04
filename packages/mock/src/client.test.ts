@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: Copyright Orangebot, Inc. and Medplum contributors
 // SPDX-License-Identifier: Apache-2.0
-import type { LoginState, NewPatientRequest, NewProjectRequest, NewUserRequest } from '@medplum/core';
+import type { LoginState, NewPatientRequest, NewProjectRequest, NewUserRequest, WithId } from '@medplum/core';
 import {
   allOk,
   badRequest,
   ClientStorage,
   ContentType,
+  createReference,
   getReferenceString,
   getWebSocketUrl,
   indexSearchParameterBundle,
@@ -20,11 +21,15 @@ import { readJson, SEARCH_PARAMETER_BUNDLE_FILES } from '@medplum/definitions';
 import { FhirRouter, MemoryRepository } from '@medplum/fhir-router';
 import type {
   Agent,
+  AsyncJob,
+  Binary,
   Bot,
   Bundle,
   CodeableConcept,
+  OperationOutcome,
   Patient,
   ProjectMembership,
+  Reference,
   SearchParameter,
   ServiceRequest,
   Task,
@@ -293,6 +298,124 @@ describe('MockClient', () => {
           },
         },
       ],
+    });
+  });
+
+  describe('Async batch', () => {
+    const batch: Bundle = {
+      resourceType: 'Bundle',
+      type: 'batch',
+      entry: [
+        { request: { method: 'GET', url: 'Patient/123' } },
+        {
+          request: { method: 'POST', url: 'Patient' },
+          resource: { resourceType: 'Patient', name: [{ given: ['Async'], family: 'Batch' }] },
+        },
+      ],
+    };
+
+    async function submit(medplum: MockClient, body: unknown): Promise<WithId<AsyncJob>> {
+      const outcome = await medplum.startAsyncRequest<OperationOutcome>(medplum.fhirUrl().toString(), {
+        body: JSON.stringify(body),
+      });
+      expect(outcome).toMatchObject({ resourceType: 'OperationOutcome', id: 'accepted' });
+      const statusUrl = outcome.issue[0].diagnostics as string;
+      const match = /^https:\/\/example\.com\/fhir\/R4\/job\/([\w-]+)\/status$/.exec(statusUrl);
+      expect(match).toBeTruthy();
+      return medplum.readResource('AsyncJob', match?.[1] as string);
+    }
+
+    test('Submit returns 202 and stores an accepted AsyncJob', async () => {
+      const medplum = new MockClient();
+      const asyncJob = await submit(medplum, batch);
+      expect(asyncJob).toMatchObject({
+        status: 'accepted',
+        request: 'https://example.com/fhir/R4/',
+        requester: createReference(DrAliceSmith),
+      });
+      expect(asyncJob.meta?.author).toStrictEqual(createReference(DrAliceSmith));
+      expect(asyncJob.requestTime).toBeDefined();
+      expect(asyncJob.output).toBeUndefined();
+    });
+
+    test('Submit without a Bundle body', async () => {
+      const medplum = new MockClient();
+      await expect(
+        medplum.startAsyncRequest(medplum.fhirUrl().toString(), {
+          body: JSON.stringify({ resourceType: 'Patient' }),
+        })
+      ).rejects.toThrow('Expected request body to be a Bundle');
+    });
+
+    test('runAsyncJobs() completes the job with a results Binary', async () => {
+      const medplum = new MockClient();
+      const asyncJob = await submit(medplum, batch);
+
+      const processed = await medplum.runAsyncJobs();
+      expect(processed).toHaveLength(1);
+
+      const completed = await medplum.readResource('AsyncJob', asyncJob.id, { cache: 'no-cache' });
+      expect(completed).toMatchObject({ status: 'completed', transactionTime: expect.any(String) });
+      expect(completed.output?.parameter?.[0]?.name).toBe('results');
+
+      const binary = await medplum.readReference(completed.output?.parameter?.[0]?.valueReference as Reference<Binary>);
+      expect(binary).toMatchObject({
+        contentType: ContentType.FHIR_JSON,
+        securityContext: { reference: getReferenceString(asyncJob) },
+        meta: { author: createReference(DrAliceSmith) },
+      });
+      const result = JSON.parse(Buffer.from(binary.data as string, 'base64').toString('utf8')) as Bundle<Patient>;
+      expect(result).toMatchObject({
+        resourceType: 'Bundle',
+        type: 'batch-response',
+        entry: [
+          { resource: HomerSimpson, response: { status: '200' } },
+          { resource: { resourceType: 'Patient' }, response: { status: '201' } },
+        ],
+      });
+
+      // Resources written by the job are stamped with the submitter's profile
+      const created = await medplum.readResource('Patient', result.entry?.[1]?.resource?.id as string);
+      expect(created.meta?.author).toStrictEqual(createReference(DrAliceSmith));
+
+      // Jobs only run once
+      await expect(medplum.runAsyncJobs()).resolves.toHaveLength(0);
+    });
+
+    test('Job writes use the submitter, not the current profile', async () => {
+      const medplum = new MockClient();
+      await submit(medplum, batch);
+      medplum.mock.setProfile({ resourceType: 'Practitioner', id: 'someone-else' });
+
+      const [job] = await medplum.runAsyncJobs();
+      const binary = await medplum.readReference(job.output?.parameter?.[0]?.valueReference as Reference<Binary>);
+      expect(binary.meta?.author).toStrictEqual(createReference(DrAliceSmith));
+    });
+
+    test('runAsyncJobs() marks a failed job as error', async () => {
+      const medplum = new MockClient();
+      const asyncJob = await submit(medplum, { ...batch, type: 'collection' });
+
+      await medplum.runAsyncJobs();
+      const failed = await medplum.readResource('AsyncJob', asyncJob.id, { cache: 'no-cache' });
+      expect(failed).toMatchObject({
+        status: 'error',
+        transactionTime: expect.any(String),
+        output: {
+          resourceType: 'Parameters',
+          parameter: [{ name: 'outcome', resource: badRequest('Unrecognized bundle type: collection') }],
+        },
+      });
+    });
+
+    test('Without a profile, nothing is stamped', async () => {
+      const medplum = new MockClient({ profile: null });
+      const asyncJob = await submit(medplum, batch);
+      expect(asyncJob.requester).toBeUndefined();
+      expect(asyncJob.meta?.author).toBeUndefined();
+
+      const [job] = await medplum.runAsyncJobs();
+      expect(job.status).toBe('completed');
     });
   });
 

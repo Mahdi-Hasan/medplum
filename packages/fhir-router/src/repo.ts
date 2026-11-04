@@ -451,6 +451,7 @@ export class MemoryRepository extends FhirRepository {
   private readonly resources: Map<string, Map<string, Resource>>;
   private readonly history: Map<string, Map<string, Resource[]>>;
   private seeding: boolean;
+  private author: Reference | undefined;
 
   constructor() {
     super();
@@ -473,6 +474,23 @@ export class MemoryRepository extends FhirRepository {
     const result = await fn();
     this.seeding = false;
     return result;
+  }
+
+  /**
+   * Runs a function with `meta.author` set to the given reference on every resource written,
+   * as the server does for the repository's user.
+   * @param author - The author reference, typically the user's profile.
+   * @param fn - The callback to run.
+   * @returns The return value from `fn`.
+   */
+  async withAuthor<T>(author: Reference | undefined, fn: () => T | Promise<T>): Promise<T> {
+    const previous = this.author;
+    this.author = author;
+    try {
+      return await fn();
+    } finally {
+      this.author = previous;
+    }
   }
 
   clear(): void {
@@ -508,6 +526,9 @@ export class MemoryRepository extends FhirRepository {
 
     result.meta.versionId ??= generateId();
     result.meta.lastUpdated ??= new Date().toISOString();
+    if (this.author) {
+      result.meta.author = this.author;
+    }
 
     const { resourceType, id } = result;
 

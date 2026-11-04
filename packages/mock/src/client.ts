@@ -14,22 +14,30 @@ import {
   ContentType,
   MedplumClient,
   OperationOutcomeError,
+  accepted,
   allOk,
   badRequest,
+  concatUrls,
+  createReference,
   generateId,
   getReferenceString,
   getStatus,
   indexSearchParameter,
   loadDataType,
   normalizeCreateBinaryOptions,
+  normalizeErrorString,
+  serverError,
 } from '@medplum/core';
 import type { FhirRequest, HttpMethod } from '@medplum/fhir-router';
-import { FhirRouter, MemoryRepository } from '@medplum/fhir-router';
+import { BatchProcessor, FhirRouter, MemoryRepository } from '@medplum/fhir-router';
 import type {
   Agent,
+  AsyncJob,
   Binary,
   Bot,
+  Bundle,
   Device,
+  OperationOutcome,
   Project,
   Reference,
   Resource,
@@ -206,6 +214,7 @@ export class MockClient extends MedplumClient {
     // if null is specified, treat it as if there is no active project
     this.project = clientOptions?.project === null ? undefined : (clientOptions?.project ?? TestProject);
     this.debug = !!clientOptions?.debug;
+    client.getProfile = () => this.profile;
   }
 
   // A container for functions that mutate this mock client's state; we keep these
@@ -287,6 +296,17 @@ export class MockClient extends MedplumClient {
 
   setActiveLoginOverride(activeLoginOverride: LoginState): void {
     this.activeLoginOverride = activeLoginOverride;
+  }
+
+  /**
+   * Runs the async batch jobs submitted with `Prefer: respond-async`, as the server's batch worker does.
+   *
+   * Each job's batch-response is stored as a Binary, and the AsyncJob is completed with a `results` output,
+   * or marked `error`.
+   * @returns The AsyncJobs that were run, in their final state.
+   */
+  runAsyncJobs(): Promise<WithId<AsyncJob>[]> {
+    return this.client.runAsyncJobs();
   }
 
   /**
@@ -488,6 +508,9 @@ export class MockFetchClient {
   readonly seedDefaultData: boolean;
   initialized = false;
   initPromise?: Promise<void>;
+  /** Returns the current user's profile, recorded as the requester of async jobs. */
+  getProfile?: () => ProfileResource | undefined;
+  private readonly pendingAsyncJobs = new Map<string, Bundle>();
 
   constructor(router: FhirRouter, repo: MemoryRepository, baseUrl: string, options?: MockFetchClientOptions) {
     this.router = router;
@@ -918,6 +941,7 @@ export class MockFetchClient {
       return exampleValueSet;
     }
 
+    const requestUrl = this.baseUrl + url;
     if (url.includes('fhir/R4')) {
       url = url.substring(url.indexOf('fhir/R4') + 7);
     }
@@ -931,6 +955,11 @@ export class MockFetchClient {
       }
     }
 
+    const headers = toIncomingHttpHeaders(options.headers);
+    if (method === 'POST' && (url === '' || url === '/') && headers.prefer === 'respond-async') {
+      return this.submitAsyncBatch(requestUrl, body);
+    }
+
     const request: FhirRequest = {
       method,
       url,
@@ -938,7 +967,7 @@ export class MockFetchClient {
       body,
       params: Object.create(null),
       query: Object.create(null),
-      headers: toIncomingHttpHeaders(options.headers),
+      headers,
     };
 
     const result = await this.router.handleRequest(request, this.repo);
@@ -947,6 +976,85 @@ export class MockFetchClient {
     } else {
       return result[1];
     }
+  }
+
+  /**
+   * Accepts an async batch: stores an AsyncJob in `accepted` status for `runAsyncJobs()`, and returns
+   * the job status URL in the `accepted` outcome, as the server does.
+   * @param requestUrl - The URL the batch was posted to.
+   * @param bundle - The batch bundle.
+   * @returns The `accepted` or error outcome.
+   */
+  private async submitAsyncBatch(requestUrl: string, bundle: Bundle | undefined): Promise<OperationOutcome> {
+    if (bundle?.resourceType !== 'Bundle') {
+      return badRequest('Expected request body to be a Bundle');
+    }
+    const profile = this.getProfile?.();
+    const requester = profile && createReference(profile);
+    const asyncJob = await this.repo.withAuthor(requester, () =>
+      this.repo.createResource<AsyncJob>({
+        resourceType: 'AsyncJob',
+        status: 'accepted',
+        request: requestUrl,
+        requester,
+        requestTime: new Date().toISOString(),
+      })
+    );
+    this.pendingAsyncJobs.set(asyncJob.id, bundle);
+    return accepted(concatUrls(this.baseUrl, `fhir/R4/job/${asyncJob.id}/status`));
+  }
+
+  /**
+   * Runs the pending async batch jobs through `BatchProcessor`, as the server's batch worker does.
+   * @returns The AsyncJobs that were run, in their final state.
+   */
+  async runAsyncJobs(): Promise<WithId<AsyncJob>[]> {
+    const results: WithId<AsyncJob>[] = [];
+    for (const [id, bundle] of this.pendingAsyncJobs) {
+      this.pendingAsyncJobs.delete(id);
+      const asyncJob = await this.repo.readResource<WithId<AsyncJob>>('AsyncJob', id);
+      results.push(await this.runAsyncBatchJob(asyncJob, bundle));
+    }
+    return results;
+  }
+
+  private async runAsyncBatchJob(asyncJob: WithId<AsyncJob>, bundle: Bundle): Promise<WithId<AsyncJob>> {
+    let update: Pick<AsyncJob, 'status' | 'output'>;
+    try {
+      // Write as the submitter, as the server's worker does
+      const binary = await this.repo.withAuthor(asyncJob.requester, async () => {
+        const req: FhirRequest = {
+          method: 'POST',
+          url: '/',
+          pathname: '',
+          params: Object.create(null),
+          query: Object.create(null),
+          body: undefined,
+        };
+        const result = await new BatchProcessor(this.router, this.repo, bundle, req).run();
+        return this.repo.createResource<Binary>({
+          resourceType: 'Binary',
+          contentType: ContentType.FHIR_JSON,
+          data: base64Encode(JSON.stringify(result)),
+          securityContext: { reference: getReferenceString(asyncJob) },
+        });
+      });
+      update = {
+        status: 'completed',
+        output: {
+          resourceType: 'Parameters',
+          parameter: [{ name: 'results', valueReference: createReference(binary) }],
+        },
+      };
+    } catch (err) {
+      const outcome =
+        err instanceof OperationOutcomeError ? err.outcome : serverError(new Error(normalizeErrorString(err)));
+      update = {
+        status: 'error',
+        output: { resourceType: 'Parameters', parameter: [{ name: 'outcome', resource: outcome }] },
+      };
+    }
+    return this.repo.updateResource<AsyncJob>({ ...asyncJob, ...update, transactionTime: new Date().toISOString() });
   }
 }
 

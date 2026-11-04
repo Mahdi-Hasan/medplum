@@ -87,6 +87,40 @@ describe('MemoryRepository', () => {
     expect(patient.meta?.accounts).toEqual([{ reference: `Account/${account.id}` }]);
   });
 
+  test('withAuthor() stamps meta.author on writes', async () => {
+    const author = { reference: 'Practitioner/123', display: 'Dr. Author' };
+    const other = { reference: 'Practitioner/456' };
+
+    const [created, updated, patched, conditional] = await repo.withAuthor(author, async () => {
+      const patient = await repo.createResource<Patient>({ resourceType: 'Patient', meta: { author: other } });
+      return [
+        patient,
+        await repo.updateResource<Patient>({ ...patient, meta: { author: other }, active: true }),
+        await repo.patchResource<Patient>('Patient', patient.id, [{ op: 'add', path: '/gender', value: 'other' }]),
+        (await repo.conditionalCreate<Patient>({ resourceType: 'Patient' }, parseSearchRequest('Patient?_id=nomatch')))
+          .resource,
+      ];
+    });
+    for (const resource of [created, updated, patched, conditional]) {
+      expect(resource.meta?.author).toStrictEqual(author);
+    }
+
+    // Outside withAuthor(), meta.author is passed through
+    const after = await repo.createResource<Patient>({ resourceType: 'Patient', meta: { author: other } });
+    expect(after.meta?.author).toStrictEqual(other);
+  });
+
+  test('withAuthor() resets the author after an error', async () => {
+    const author = { reference: 'Practitioner/123' };
+    await expect(
+      repo.withAuthor(author, () => {
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
+    const patient = await repo.createResource<Patient>({ resourceType: 'Patient' });
+    expect(patient.meta?.author).toBeUndefined();
+  });
+
   test('Create resource with duplicate ID throws error', async () => {
     const id = randomUUID();
     await repo.createResource({ resourceType: 'Patient', id });
