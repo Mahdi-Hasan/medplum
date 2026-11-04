@@ -150,10 +150,11 @@ export function parseSearchRequest<T extends Resource = Resource>(
   let pathname = '';
   let searchParams: URLSearchParams | undefined = undefined;
   if (typeof url === 'string') {
-    if (url.includes('?')) {
-      const [path, search] = url.split('?');
-      pathname = path;
-      searchParams = new URLSearchParams(search);
+    const queryIndex = url.indexOf('?');
+    if (queryIndex >= 0) {
+      // Split at the first '?' only: a '?' is allowed inside the query (RFC 3986, section 3.4)
+      pathname = url.slice(0, queryIndex);
+      searchParams = new URLSearchParams(url.slice(queryIndex + 1));
     } else {
       pathname = url;
     }

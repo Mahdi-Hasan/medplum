@@ -129,6 +129,15 @@ describe('Search Utils', () => {
     });
   });
 
+  test('Parse search URL with "?" inside a query value', () => {
+    const result = parseSearchRequest('Patient?identifier=http://ex.org/ids?type=mrn|123&name=Bob');
+    expect(result.resourceType).toBe('Patient');
+    expect(result.filters).toEqual([
+      { code: 'identifier', operator: Operator.EQUALS, value: 'http://ex.org/ids?type=mrn|123' },
+      { code: 'name', operator: Operator.EQUALS, value: 'Bob' },
+    ]);
+  });
+
   test('Parse Patient search', () => {
     const result = parseSearchRequest('/x/y/z/Patient');
     expect(result.resourceType).toBe('Patient');
