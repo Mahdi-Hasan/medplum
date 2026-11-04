@@ -43,11 +43,22 @@ export function mapCcdaToFhirDate(date: string | undefined): string | undefined 
 }
 
 /**
+ * How to map a C-CDA time that has no time zone offset.
+ * - `'utc'` (default): treat the time as UTC (`2024-01-15T09:30:00Z`).
+ * - `'date'`: keep only the stated date (`2024-01-15`), since the zone is unknown.
+ */
+export type CcdaUnzonedTime = 'utc' | 'date';
+
+/**
  * Map the C-CDA date time to the FHIR date time.
  * @param dateTime - The C-CDA date time.
+ * @param unzonedTime - How to map a time that has no time zone offset. Defaults to `'utc'`.
  * @returns The FHIR date time.
  */
-export function mapCcdaToFhirDateTime(dateTime: string | undefined): string | undefined {
+export function mapCcdaToFhirDateTime(
+  dateTime: string | undefined,
+  unzonedTime: CcdaUnzonedTime = 'utc'
+): string | undefined {
   if (!dateTime) {
     return undefined;
   }
@@ -69,7 +80,7 @@ export function mapCcdaToFhirDateTime(dateTime: string | undefined): string | un
   }
 
   const date = `${year}-${month}-${dateAndTime.substring(6, 8)}`;
-  if (dateAndTime.length < 10) {
+  if (dateAndTime.length < 10 || (!tz && unzonedTime === 'date')) {
     return date;
   }
 

@@ -72,6 +72,22 @@ describe('mapCcdaToFhirDateTime', () => {
   test('should convert -0000 timezone to Z', () => {
     expect(mapCcdaToFhirDateTime('20241001090000-0000')).toBe('2024-10-01T09:00:00Z');
   });
+
+  test('should keep only the date for unzoned times when unzonedTime is date', () => {
+    expect(mapCcdaToFhirDateTime('2017031514', 'date')).toBe('2017-03-15');
+    expect(mapCcdaToFhirDateTime('20240115093000', 'date')).toBe('2024-01-15');
+    expect(mapCcdaToFhirDateTime('20240115093000.123', 'date')).toBe('2024-01-15');
+  });
+
+  test('should keep zoned times when unzonedTime is date', () => {
+    expect(mapCcdaToFhirDateTime('20240115093000-0500', 'date')).toBe('2024-01-15T09:30:00-05:00');
+    expect(mapCcdaToFhirDateTime('20240115093000+0000', 'date')).toBe('2024-01-15T09:30:00Z');
+    expect(mapCcdaToFhirDateTime('20240115', 'date')).toBe('2024-01-15');
+  });
+
+  test('should default unzoned times to UTC', () => {
+    expect(mapCcdaToFhirDateTime('20240115093000', 'utc')).toBe('2024-01-15T09:30:00Z');
+  });
 });
 
 describe('mapFhirToCcdaDateTime', () => {
